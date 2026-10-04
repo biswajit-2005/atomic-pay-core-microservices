@@ -269,6 +269,7 @@ public class TransferService {
         transitionState(tx, TransactionStatus.COMPENSATING);
         TransactionStepEntity compensateStep = createStep(tx.getId(), 10, StepType.COMPENSATE_DEBIT);
         try {
+            metricsService.incrementSagaCompensation();
             accountBalanceService.executeCompensationDebit(request.getSenderAccountId(), request.getAmount());
             completeStepSuccess(compensateStep);
             transitionState(tx, TransactionStatus.COMPENSATED);
@@ -293,6 +294,7 @@ public class TransferService {
         transitionState(tx, TransactionStatus.COMPENSATING);
         TransactionStepEntity compensateStep = createStep(tx.getId(), 10, StepType.COMPENSATE_DEBIT);
         try {
+            metricsService.incrementSagaCompensation();
             accountBalanceService.executeCompensationCredit(request.getReceiverAccountId(), request.getAmount());
             accountBalanceService.executeCompensationDebit(request.getSenderAccountId(), request.getAmount());
             completeStepSuccess(compensateStep);
