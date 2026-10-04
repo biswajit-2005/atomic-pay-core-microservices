@@ -1,25 +1,79 @@
-# Failure Recovery, Saga Compensation, & Reconciliation
+# Failure Recovery, Saga Compensation, & Reconciliation — Atomic-Pay
 
-## 1. Failure Scenarios and Guarantees
+## 1. Saga Failure Handling & Backward Compensation
 
-### Scenario A: Partial Failure during Saga Execution (Credit Fails after Debit)
-1. Sender is debited successfully (Status: `DEBITED`).
-2. Credit operation to receiver fails due to transient node network error or account lock timeout.
-3. Saga Orchestrator catches failure, updates status to `COMPENSATING`.
-4. Orchestrator executes compensating transaction: Credits sender account back by transfer amount.
-5. Transaction state is finalized as `COMPENSATED`.
-6. Ledger reflects the original debit and compensating credit entry. No money is lost or created.
+When a multi-step transaction fails midway (e.g., credit operation to receiver fails after sender has been debited), the distributed Saga engine initiates backward step-by-step compensation to restore balance integrity.
 
-### Scenario B: Uncertain Transaction Outcome (Network Partition / Timeout)
-1. Operation status cannot be definitively confirmed as Success or Failure (e.g. database connection drops mid-commit).
-2. Transaction transitions to `PENDING`.
-3. Background Reconciliation Engine picks up `PENDING` transactions older than 30 seconds.
-4. Reconciliation queries authoritative ledger entries and account balances:
-   - If ledger entries exist: state completes to `COMPLETED`.
-   - If no ledger entries exist: state transitions to `RECONCILIATION_REQUIRED` for human/automated audit resolution.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TxEngine as Saga Orchestrator
+    participant Sender as Sender Account
+    participant Receiver as Receiver Account
+    participant Idempotency as Idempotency Engine
+    participant Outbox as Outbox Events
 
-### Scenario C: Kafka Consumer Duplicate Delivery
-1. Kafka broker delivers the same `TRANSACTION_COMPLETED` event multiple times to Notification/Audit Service.
-2. Consumer checks `processed_events` table within its schema `(consumer_name, event_id)` inside a database transaction.
-3. If `event_id` exists: event is safely ignored (Idempotent Consumer).
-4. If `event_id` does not exist: process event and record `(consumer_name, event_id)`.
+    Note over TxEngine: Step 1: VALIDATE Request - Passed
+    Note over TxEngine: Step 2: DEBIT Sender Account - Passed
+    TxEngine->>Sender: Execute Debit (Status -> DEBITED)
+    
+    Note over TxEngine: Step 3: CREDIT Receiver Account - FAILED!
+    TxEngine->>Receiver: Execute Credit (Simulated Failure / Timeout)
+    Receiver-->>TxEngine: Exception / Failure Signal
+    
+    Note over TxEngine: Trigger Backward Saga Compensation
+    TxEngine->>TxEngine: Transition State -> COMPENSATING
+    TxEngine->>Sender: Execute Compensation Debit (Refund Sender)
+    Sender-->>TxEngine: Debit Reversed Successfully
+    
+    TxEngine->>TxEngine: Finalize State -> COMPENSATED
+    TxEngine->>Idempotency: Mark Idempotency Record (Status=COMPLETED, HTTP=422)
+    TxEngine->>Outbox: Record TRANSACTION_COMPENSATED Event
+```
+
+---
+
+## 2. Uncertain Outcome Handling & Reconciliation Workflow
+
+```mermaid
+flowchart TD
+    A[Transaction In-Flight] --> B{Step Timeout / Network Failure?}
+    B -- No --> C[Finalize State COMPLETED / FAILED]
+    B -- Yes --> D[Transition State to PENDING]
+    
+    D --> E[Automated Reconciliation Job Runs Every 30s]
+    E --> F{Evaluate Ledger Entries vs Accounts}
+    
+    F -- Double-Entry Ledger Exists & Balanced --> G[Resolve State to COMPLETED]
+    F -- Partial Debit Exists & No Credit --> H[Execute Auto Compensation -> COMPENSATED]
+    F -- Unresolvable / Missing Data --> I[Flag Status RECONCILIATION_REQUIRED]
+    
+    I --> J[Admin Dashboard Inspection & Manual Audit Resolution]
+    J --> K[Admin Resolves Issue via UI]
+```
+
+---
+
+## 3. Idempotent Consumer Deduplication (Inbox Pattern)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Kafka as Apache Kafka Broker
+    participant Consumer as Consumer Service (Notification / Audit)
+    participant Inbox as DB processed_events Table
+    participant DB as Consumer DB Schema
+
+    Kafka->>Consumer: Deliver Domain Event (event_id=123)
+    Consumer->>Inbox: SELECT 1 FROM processed_events WHERE consumer_name=? AND event_id=123
+    
+    alt Event Already Processed (Duplicate Delivery)
+        Inbox-->>Consumer: Record Exists
+        Consumer-->>Consumer: Log duplicate message & skip processing
+    else First Time Event Delivery
+        Inbox-->>Consumer: No Record Found
+        Consumer->>DB: Process Business Logic (Save Notification / Audit Log)
+        Consumer->>Inbox: INSERT INTO processed_events (consumer_name, event_id, created_at)
+        Consumer-->>Consumer: Commit DB Transaction & Acknowledge Kafka Message
+    end
+```

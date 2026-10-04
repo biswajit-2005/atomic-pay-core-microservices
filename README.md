@@ -4,156 +4,159 @@
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://www.oracle.com/java/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.4-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://www.postgresql.org/)
-[![Kafka](https://img.shields.io/badge/Apache%20Kafka-3.7-black.svg)](https://kafka.apache.org/)
+[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka-3.7-black.svg)](https://kafka.apache.org/)
+[![React](https://img.shields.io/badge/React-18-blue.svg)](https://react.dev/)
 
-A resume-grade, production-designed distributed digital banking and wallet backend built with Java 21, Spring Boot 3.x, PostgreSQL, Redis, Apache Kafka, and Docker.
+**Atomic-Pay** is a production-designed distributed digital banking and wallet platform built using **Java 21**, **Spring Boot 3.3**, **PostgreSQL 16**, **Redis**, **Apache Kafka**, **Prometheus/Grafana**, and **React**. 
 
----
+The system guarantees financial transaction correctness, strict idempotency, double-entry ledger balancing, distributed Saga failure recovery, transactional outbox publishing, and consumer deduplication under concurrent and failure-prone environments.
 
-## Key System Principles
-
-- **No Floating-Point Money**: All monetary amounts are stored as `NUMERIC(19,4)` in PostgreSQL and handled as `BigDecimal` in Java.
-- **Double-Entry Ledger**: Immutable append-only debits and credits balancing to zero for every completed transaction.
-- **PostgreSQL Source of Truth**: Balances and financial state reside safely in PostgreSQL. Redis is used solely for idempotency fast-path, rate limiting, and short-term locks.
-- **Guaranteed Idempotency**: Dual-layer protection using Redis fast-path and PostgreSQL `UNIQUE(sender_account_id, idempotency_key)` constraints.
-- **Transactional Outbox Pattern**: Prevents DB/Kafka dual-write anomalies by writing domain events to `outbox_events` in the same database transaction.
-- **Idempotent Kafka Consumers**: Inbox pattern with `processed_events(consumer_name, event_id)` preventing duplicate event side-effects.
+> *"A financial transaction is not considered reliable merely because the normal request succeeds. The system must remain correct when requests are duplicated, operations are concurrent, services fail, messages are delayed or duplicated, and a transaction's final outcome becomes temporarily uncertain."*
 
 ---
 
-## System Architecture
+## Key System Principles & Architecture
 
-```
-                    ┌──────────────────┐
-                    │   React Client   │
-                    └────────┬─────────┘
-                             │ HTTPS
-                             ▼
-                    ┌──────────────────┐
-                    │   API Gateway    │
-                    │ Spring Gateway   │
-                    └────────┬─────────┘
-                             │
-             ┌───────────────┼────────────────┐
-             ▼               ▼                ▼
-     ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-     │ Auth Service │ │Transaction   │ │Account       │
-     │              │ │Service       │ │Service       │
-     └──────────────┘ └──────┬───────┘ └──────┬───────┘
-                             │                │
-                             ▼                ▼
-                      ┌────────────────────────────┐
-                      │        PostgreSQL          │
-                      │ users/accounts/ledger/...  │
-                      └────────────────────────────┘
-                             ▲
-                             │
-                    ┌────────┴────────┐
-                    │      Redis      │
-                    │ idempotency /   │
-                    │ locks / cache   │
-                    └─────────────────┘
-
-                     Transaction Service
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │      Kafka      │
-                    └───────┬─────────┘
-                            │
-             ┌──────────────┼──────────────┐
-             ▼              ▼              ▼
-       Notification     Audit Service   Analytics
-          Service
-
-                 ┌───────────────────────┐
-                 │ Prometheus + Grafana  │
-                 └───────────────────────┘
-```
+1. **Exact Monetary Precision (`NUMERIC(19,4)`)**: No floating-point types (`float`/`double`) are permitted for currency values. All balance operations utilize PostgreSQL `NUMERIC(19,4)` and Java `BigDecimal`.
+2. **Immutable Double-Entry Ledger**: Every successful transfer inserts paired `DEBIT` and `CREDIT` entries in the `ledger.ledger_entries` table balancing to exactly zero.
+3. **Database Concurrency & Row-Level Locking**: Account balance mutations employ PostgreSQL `SELECT ... FOR UPDATE` pessimistic locking in deterministic Account ID order (`min(id), max(id)`), completely eliminating deadlocks, race conditions, and negative balances.
+4. **Dual-Layer Idempotency Engine**: Idempotency is enforced using Redis fast-path caching alongside PostgreSQL `UNIQUE(user_id, idempotency_key)` and request payload SHA-256 hash checks. Duplicate requests return cached responses without re-executing state changes.
+5. **Distributed Saga Engine with Backward Compensation**: Multi-step transfer workflows (`VALIDATE` -> `DEBIT` -> `CREDIT` -> `LEDGER`) automatically execute compensating backward debits/credits if downstream operations fail, maintaining system consistency.
+6. **Transactional Outbox Pattern**: Events are persisted to PostgreSQL `transactions.outbox_events` within the same database transaction as financial mutations. A dedicated publisher worker polls and delivers events to Kafka, eliminating dual-write loss.
+7. **Idempotent Event Consumers (Inbox Pattern)**: Consumers (`notification-service`, `audit-service`) record message execution in `processed_events(consumer_name, event_id)` inside local database transactions to ignore duplicate Kafka deliveries.
+8. **Automated Reconciliation Engine**: Background worker periodically evaluates ledger entries vs account balances, flags discrepancies, and enables automated/manual audit resolution.
+9. **Observability & Distributed Tracing**: Micrometer metrics (`transactions_total`, `idempotency_hits_total`, `saga_compensation_total`, latency percentiles P50/P95/P99) scraped by Prometheus and visualized via pre-built Grafana dashboards, with `X-Correlation-ID` MDC trace context.
 
 ---
 
-## Monorepo Project Structure
+## Monorepo Architecture
 
 ```text
-reliable-financial-transactions/
-├── README.md
-├── LICENSE
-├── docker-compose.yml
-├── .env.example
-├── .gitignore
-├── pom.xml
-│
-├── docs/
-│   ├── architecture.md
-│   ├── database.md
-│   ├── transaction-flow.md
-│   ├── failure-recovery.md
-│   ├── api.md
-│   └── adr/
-│
-├── gateway/
-│
-├── services/
-│   ├── auth-service/
-│   ├── account-service/
-│   ├── transaction-service/
-│   ├── ledger-service/
-│   ├── notification-service/
-│   ├── audit-service/
-│   └── analytics-service/
-│
-├── frontend/
-│
-├── infrastructure/
-│   ├── postgres/
-│   ├── kafka/
-│   ├── redis/
-│   ├── prometheus/
-│   └── grafana/
-│
-└── scripts/
+                    ┌─────────────────────────┐
+                    │  React Admin Dashboard  │
+                    └────────────┬────────────┘
+                                 │ HTTP/JSON
+                                 ▼
+                    ┌─────────────────────────┐
+                    │   Spring API Gateway    │
+                    └────────────┬────────────┘
+                                 │ JWT / Correlation-ID
+             ┌───────────────────┼───────────────────┐
+             ▼                   ▼                   ▼
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │  Auth Service   │ │Transaction Engine│ │ Account Service │
+    └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
+             │                   │                   │
+             └───────────────────┼───────────────────┘
+                                 ▼
+                     ┌───────────────────────┐
+                     │     PostgreSQL 16     │
+                     │ auth/accounts/ledger/ │
+                     │ transactions/audit    │
+                     └───────────┬───────────┘
+                                 │ Outbox Publisher
+                                 ▼
+                     ┌───────────────────────┐
+                     │     Apache Kafka      │
+                     └───────────┬───────────┘
+                                 │
+             ┌───────────────────┼───────────────────┐
+             ▼                   ▼                   ▼
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │  Notification   │ │  Audit Service  │ │Analytics Service│
+    └─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
 ---
 
-## Quick Start (Phase 1 Infrastructure)
+## Microservices Architecture & Directory Layout
 
-### 1. Launch Docker Infrastructure
-Spin up PostgreSQL 16, Redis 7, Kafka 3.7 (KRaft mode), Prometheus, and Grafana:
+```text
+Atomic-pay/
+├── docker-compose.yml              # PostgreSQL, Redis, Kafka, Prometheus, Grafana
+├── pom.xml                         # Maven Parent Reactor POM
+├── RELIABLE_FINANCIAL_TRANSACTIONS_AI_SPEC.md # Full Project Spec
+├── docs/                           # Documentation
+│   ├── architecture.md             # System Architecture & Diagrams
+│   ├── database.md                 # Database Schemas & ER Diagrams
+│   ├── transaction-flow.md         # Transaction State Machine & Sequence Diagrams
+│   ├── failure-recovery.md         # Saga Compensation & Reconciliation Flows
+│   ├── api.md                      # OpenAPI REST Specification
+│   └── demo-script.md              # Interactive Live Demo Script
+├── gateway/                        # Spring Cloud API Gateway (Port 8080)
+├── services/
+│   ├── auth-service/               # JWT Auth, User Management, KYC (Port 8081)
+│   ├── account-service/            # Accounts & Balance Operations (Port 8082)
+│   ├── transaction-service/        # Core Transfer Engine, Saga, Outbox (Port 8083)
+│   ├── ledger-service/             # Double-Entry Bookkeeping (Port 8084)
+│   ├── notification-service/       # Deduplicated Notification Consumer (Port 8085)
+│   ├── audit-service/              # Deduplicated System Audit Logger (Port 8086)
+│   └── analytics-service/          # Event Stream Analytics (Port 8087)
+├── frontend/                       # Modern React Dashboard & Admin Portal (Port 5173)
+└── infrastructure/
+    ├── postgres/                   # Init SQL Schemas
+    ├── kafka/                      # Topic configs
+    ├── prometheus/                 # Scraping configuration
+    └── grafana/                    # Provisioned Dashboards & Data Sources
+```
 
+---
+
+## Quick Start Guide
+
+### 1. Start Infrastructure Containers
+Launch PostgreSQL 16, Redis 7, Kafka 3.7 (KRaft mode), Prometheus, and Grafana:
 ```bash
 docker compose up -d
 ```
 
-### 2. Verify Infrastructure Status
-Check container status:
-
+Verify running containers:
 ```bash
 docker compose ps
 ```
 
-Verify PostgreSQL schema initialization:
-
+### 2. Build Microservices Monorepo
+Execute Maven reactor build across all 9 Java microservices:
 ```bash
-docker exec -it atomic_pay_postgres psql -U postgres -d atomic_pay -c "\dn"
+./mvnw clean compile
 ```
 
-Expected schemas: `auth`, `accounts`, `transactions`, `ledger`, `audit`, `notifications`, `analytics`.
-
-### 3. Build Java Backend Microservices
-Ensure Java 21+ is installed, then execute:
-
+Run unit & integration test suites:
 ```bash
-./mvnw clean package -DskipTests
+./mvnw test "-Dnet.bytebuddy.experimental=true"
 ```
+
+### 3. Launch React Frontend Dashboard
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Access dashboard UI at `http://localhost:5173`.
 
 ---
 
-## Phase 1 Delivery Report
+## API Endpoints Summary
 
-- **Files Created**: `docker-compose.yml`, `.env.example`, `.gitignore`, `pom.xml`, `gateway/`, `services/*` (pom, application.yml, migrations, Spring Boot main applications), `infrastructure/*`, `docs/*`, `frontend/*`, `scripts/*`.
-- **Database Schemas Initialized**: `auth`, `accounts`, `transactions`, `ledger`, `audit`, `notifications`, `analytics`.
-- **Flyway Migrations Configured**: V1 migration scripts for each isolated microservice schema.
-- **Observability Setup**: Prometheus scraping targets configured alongside Grafana auto-provisioned dashboards.
-- **Verification**: All microservice POMs validate and compile clean under parent Maven build.
+- **Auth**: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`
+- **Accounts**: `POST /api/v1/accounts`, `GET /api/v1/accounts`, `GET /api/v1/accounts/{accountId}/balance`
+- **Transfers**: `POST /api/v1/transfers` (Requires `Idempotency-Key` header), `GET /api/v1/transfers/{id}`
+- **Reconciliation**: `POST /api/v1/admin/reconciliation/run`, `GET /api/v1/admin/reconciliation/issues`
+- **Metrics**: `GET /actuator/prometheus`
+
+See [`docs/api.md`](file:///c:/Users/biswa/WEB_DEV_PROJECTS/Atomic-pay/docs/api.md) for complete request/response schemas.
+
+---
+
+## Demonstrated Technical Resume Highlights
+
+- Designed and built a **Reliable Distributed Financial Transaction Platform** in Java 21, Spring Boot, PostgreSQL, Redis, Kafka, and React.
+- Implemented concurrency-safe account mutations using database row locking (`SELECT FOR UPDATE`) and immutable double-entry ledgering (`NUMERIC(19,4)`), preventing duplicate transfers and balance corruption under high contention.
+- Engineered a **Saga Engine** with backward compensating transactions, timeout pending states, and automated reconciliation for partial or uncertain transaction outcomes.
+- Implemented **Transactional Outbox** and deduplicated Kafka consumers (`processed_events` inbox pattern) ensuring reliable event delivery and execution.
+- Configured Prometheus/Grafana observability dashboards tracking real-time throughput, P99 latency percentiles, saga compensations, and idempotency cache hit rates.
+
+---
+
+## License
+[MIT License](LICENSE)
