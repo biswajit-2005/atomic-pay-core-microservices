@@ -32,19 +32,22 @@ public class TransferService {
     private final IdempotencyService idempotencyService;
     private final AccountBalanceService accountBalanceService;
     private final EntityManager entityManager;
+    private final OutboxPublisherService outboxPublisherService;
 
     public TransferService(
             TransactionRepository transactionRepository,
             TransactionStepRepository transactionStepRepository,
             IdempotencyService idempotencyService,
             AccountBalanceService accountBalanceService,
-            EntityManager entityManager
+            EntityManager entityManager,
+            OutboxPublisherService outboxPublisherService
     ) {
         this.transactionRepository = transactionRepository;
         this.transactionStepRepository = transactionStepRepository;
         this.idempotencyService = idempotencyService;
         this.accountBalanceService = accountBalanceService;
         this.entityManager = entityManager;
+        this.outboxPublisherService = outboxPublisherService;
     }
 
     @Transactional
@@ -179,6 +182,12 @@ public class TransferService {
         TransactionEntity finalTx = transactionRepository.save(savedTx);
         idempotencyService.markCompleted(idempotencyRecord, finalTx.getId(), 200, "COMPLETED");
 
+        outboxPublisherService.recordOutboxEvent(
+                finalTx.getId(), "TRANSACTION_COMPLETED", finalTx.getCorrelationId(),
+                finalTx.getSenderAccountId(), finalTx.getReceiverAccountId(),
+                finalTx.getAmount(), finalTx.getCurrency(), "COMPLETED", null
+        );
+
         log.info("Transaction {} completed successfully. Debited {} from {} to {}", finalTx.getId(), finalTx.getAmount(), finalTx.getSenderAccountId(), finalTx.getReceiverAccountId());
 
         List<TransactionStepEntity> steps = transactionStepRepository.findByTransactionIdOrderByStepOrderAsc(finalTx.getId());
@@ -259,6 +268,11 @@ public class TransferService {
             tx.setFailureReason(reason);
             transactionRepository.save(tx);
             idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 422, "COMPENSATED: " + reason);
+            outboxPublisherService.recordOutboxEvent(
+                    tx.getId(), "TRANSACTION_COMPENSATED", tx.getCorrelationId(),
+                    tx.getSenderAccountId(), tx.getReceiverAccountId(),
+                    tx.getAmount(), tx.getCurrency(), "COMPENSATED", reason
+            );
         } catch (Exception e) {
             log.error("CRITICAL: Failed to compensate debit for transaction {}", tx.getId(), e);
             failStep(compensateStep, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
@@ -279,6 +293,11 @@ public class TransferService {
             tx.setFailureReason(reason);
             transactionRepository.save(tx);
             idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 422, "COMPENSATED: " + reason);
+            outboxPublisherService.recordOutboxEvent(
+                    tx.getId(), "TRANSACTION_COMPENSATED", tx.getCorrelationId(),
+                    tx.getSenderAccountId(), tx.getReceiverAccountId(),
+                    tx.getAmount(), tx.getCurrency(), "COMPENSATED", reason
+            );
         } catch (Exception e) {
             log.error("CRITICAL: Failed to compensate full transfer for transaction {}", tx.getId(), e);
             failStep(compensateStep, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
@@ -294,6 +313,11 @@ public class TransferService {
         tx.setFailureReason(reason);
         transactionRepository.save(tx);
         idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 504, "RECONCILIATION_REQUIRED: " + reason);
+        outboxPublisherService.recordOutboxEvent(
+                tx.getId(), "TRANSACTION_RECONCILIATION_REQUIRED", tx.getCorrelationId(),
+                tx.getSenderAccountId(), tx.getReceiverAccountId(),
+                tx.getAmount(), tx.getCurrency(), "RECONCILIATION_REQUIRED", reason
+        );
     }
 
     private void validateTransferRequest(TransferRequest request) {
@@ -352,6 +376,11 @@ public class TransferService {
         tx.setFailureCode(failureCode);
         tx.setFailureReason(failureReason);
         transactionRepository.save(tx);
+        outboxPublisherService.recordOutboxEvent(
+                tx.getId(), "TRANSACTION_FAILED", tx.getCorrelationId(),
+                tx.getSenderAccountId(), tx.getReceiverAccountId(),
+                tx.getAmount(), tx.getCurrency(), "FAILED", failureReason
+        );
     }
 
     private TransactionResponse mapToTransactionResponse(TransactionEntity tx, List<TransactionStepEntity> steps) {

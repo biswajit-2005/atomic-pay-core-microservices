@@ -48,6 +48,9 @@ class TransferServiceTest {
     @Mock
     private jakarta.persistence.Query query;
 
+    @Mock
+    private OutboxPublisherService outboxPublisherService;
+
     @InjectMocks
     private TransferService transferService;
 
