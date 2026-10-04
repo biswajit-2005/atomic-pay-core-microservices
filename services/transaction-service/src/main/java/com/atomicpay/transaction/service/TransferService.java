@@ -33,6 +33,7 @@ public class TransferService {
     private final AccountBalanceService accountBalanceService;
     private final EntityManager entityManager;
     private final OutboxPublisherService outboxPublisherService;
+    private final TransactionMetricsService metricsService;
 
     public TransferService(
             TransactionRepository transactionRepository,
@@ -40,7 +41,8 @@ public class TransferService {
             IdempotencyService idempotencyService,
             AccountBalanceService accountBalanceService,
             EntityManager entityManager,
-            OutboxPublisherService outboxPublisherService
+            OutboxPublisherService outboxPublisherService,
+            TransactionMetricsService metricsService
     ) {
         this.transactionRepository = transactionRepository;
         this.transactionStepRepository = transactionStepRepository;
@@ -48,6 +50,7 @@ public class TransferService {
         this.accountBalanceService = accountBalanceService;
         this.entityManager = entityManager;
         this.outboxPublisherService = outboxPublisherService;
+        this.metricsService = metricsService;
     }
 
     @Transactional
@@ -68,6 +71,7 @@ public class TransferService {
         if (existingRecord.isPresent()) {
             IdempotencyRecordEntity record = existingRecord.get();
             if (record.getTransactionId() != null) {
+                metricsService.incrementIdempotencyHits();
                 return getTransaction(record.getTransactionId());
             }
         }
@@ -79,8 +83,11 @@ public class TransferService {
         if (existingTx.isPresent()) {
             TransactionEntity tx = existingTx.get();
             idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 200, tx.getStatus().name());
+            metricsService.incrementIdempotencyHits();
             return mapToTransactionResponse(tx, transactionStepRepository.findByTransactionIdOrderByStepOrderAsc(tx.getId()));
         }
+
+        metricsService.incrementTransactionsTotal();
 
         // Initialize Transaction State
         TransactionEntity transaction = TransactionEntity.builder()
@@ -188,6 +195,7 @@ public class TransferService {
                 finalTx.getAmount(), finalTx.getCurrency(), "COMPLETED", null
         );
 
+        metricsService.incrementTransactionsCompleted();
         log.info("Transaction {} completed successfully. Debited {} from {} to {}", finalTx.getId(), finalTx.getAmount(), finalTx.getSenderAccountId(), finalTx.getReceiverAccountId());
 
         List<TransactionStepEntity> steps = transactionStepRepository.findByTransactionIdOrderByStepOrderAsc(finalTx.getId());

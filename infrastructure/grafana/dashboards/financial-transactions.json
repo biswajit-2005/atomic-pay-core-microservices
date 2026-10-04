@@ -4,7 +4,7 @@
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "liveNow": false,
@@ -34,6 +34,78 @@
         {
           "expr": "sum(rate(transactions_failed_total[1m]))",
           "legendFormat": "Failed"
+        },
+        {
+          "expr": "sum(rate(transactions_pending_total[1m]))",
+          "legendFormat": "Pending (Reconciliation)"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "Idempotency Hits",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(idempotency_hits_total[1m]))",
+          "legendFormat": "Deduplicated Requests/sec"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "id": 4,
+      "title": "Saga Compensations",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(saga_compensation_total[1m]))",
+          "legendFormat": "Compensations/sec"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "id": 5,
+      "title": "Reconciliation Mismatches Detected",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(reconciliation_issues_total[1m]))",
+          "legendFormat": "Issues/sec"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 6,
+      "title": "Transaction Processing Latency (Percentiles)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(transaction_processing_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P50 Latency (s)"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(transaction_processing_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P95 Latency (s)"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(transaction_processing_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99 Latency (s)"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 7,
+      "title": "Transactional Outbox & Kafka Events Published",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(kafka_events_published_total[1m]))",
+          "legendFormat": "Published Events/sec"
         }
       ]
     }
@@ -41,11 +113,11 @@
   "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["atomic-pay", "financial", "transactions"],
+  "tags": ["atomic-pay", "financial", "transactions", "observability"],
   "time": {
     "from": "now-15m",
     "to": "now"
   },
-  "title": "Atomic-Pay System Overview",
+  "title": "Atomic-Pay Financial Transactions & System Health",
   "uid": "atomic-pay-overview"
 }

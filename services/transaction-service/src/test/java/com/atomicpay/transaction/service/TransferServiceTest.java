@@ -51,6 +51,9 @@ class TransferServiceTest {
     @Mock
     private OutboxPublisherService outboxPublisherService;
 
+    @Mock
+    private TransactionMetricsService metricsService;
+
     @InjectMocks
     private TransferService transferService;
 
