@@ -72,6 +72,93 @@ public class AccountBalanceService {
     }
 
     @Transactional
+    public void executeDebit(UUID senderAccountId, BigDecimal amount) {
+        AccountData senderAccount = lockAccountForUpdate(senderAccountId);
+
+        if (!"ACTIVE".equalsIgnoreCase(senderAccount.getStatus())) {
+            throw new TransactionException(ErrorCode.ACCOUNT_SUSPENDED, "Sender account is not active");
+        }
+
+        if (senderAccount.getCurrentBalance().compareTo(amount) < 0) {
+            throw new TransactionException(
+                    ErrorCode.INSUFFICIENT_BALANCE,
+                    String.format("Insufficient balance in sender account. Available: %s, Requested: %s", senderAccount.getCurrentBalance(), amount)
+            );
+        }
+
+        int debitedRows = entityManager.createNativeQuery(
+                        "UPDATE accounts.accounts SET current_balance = current_balance - :amount, version = version + 1, updated_at = :now WHERE id = :id AND current_balance >= :amount")
+                .setParameter("amount", amount)
+                .setParameter("now", Timestamp.from(OffsetDateTime.now().toInstant()))
+                .setParameter("id", senderAccountId)
+                .executeUpdate();
+
+        if (debitedRows != 1) {
+            throw new TransactionException(ErrorCode.INSUFFICIENT_BALANCE, "Insufficient balance during debit execution");
+        }
+
+        log.info("Successfully debited {} from sender account {}", amount, senderAccountId);
+    }
+
+    @Transactional
+    public void executeCredit(UUID receiverAccountId, BigDecimal amount) {
+        AccountData receiverAccount = lockAccountForUpdate(receiverAccountId);
+
+        if (!"ACTIVE".equalsIgnoreCase(receiverAccount.getStatus())) {
+            throw new TransactionException(ErrorCode.ACCOUNT_SUSPENDED, "Receiver account is not active");
+        }
+
+        int creditedRows = entityManager.createNativeQuery(
+                        "UPDATE accounts.accounts SET current_balance = current_balance + :amount, version = version + 1, updated_at = :now WHERE id = :id")
+                .setParameter("amount", amount)
+                .setParameter("now", Timestamp.from(OffsetDateTime.now().toInstant()))
+                .setParameter("id", receiverAccountId)
+                .executeUpdate();
+
+        if (creditedRows != 1) {
+            throw new TransactionException(ErrorCode.INTERNAL_ERROR, "Failed to credit receiver account balance");
+        }
+
+        log.info("Successfully credited {} to receiver account {}", amount, receiverAccountId);
+    }
+
+    @Transactional
+    public void executeCompensationDebit(UUID senderAccountId, BigDecimal amount) {
+        lockAccountForUpdate(senderAccountId);
+
+        int refundedRows = entityManager.createNativeQuery(
+                        "UPDATE accounts.accounts SET current_balance = current_balance + :amount, version = version + 1, updated_at = :now WHERE id = :id")
+                .setParameter("amount", amount)
+                .setParameter("now", Timestamp.from(OffsetDateTime.now().toInstant()))
+                .setParameter("id", senderAccountId)
+                .executeUpdate();
+
+        if (refundedRows != 1) {
+            throw new TransactionException(ErrorCode.INTERNAL_ERROR, "Failed to execute compensation refund to sender account");
+        }
+
+        log.info("Successfully compensated/refunded {} to sender account {}", amount, senderAccountId);
+    }
+
+    @Transactional
+    public void executeCompensationCredit(UUID receiverAccountId, BigDecimal amount) {
+        AccountData receiverAccount = lockAccountForUpdate(receiverAccountId);
+
+        int reversedRows = entityManager.createNativeQuery(
+                        "UPDATE accounts.accounts SET current_balance = current_balance - :amount, version = version + 1, updated_at = :now WHERE id = :id AND current_balance >= :amount")
+                .setParameter("amount", amount)
+                .setParameter("now", Timestamp.from(OffsetDateTime.now().toInstant()))
+                .setParameter("id", receiverAccountId)
+                .executeUpdate();
+
+        if (reversedRows != 1) {
+            throw new TransactionException(ErrorCode.INTERNAL_ERROR, "Failed to reverse credit on receiver account during compensation");
+        }
+
+        log.info("Successfully reversed credit of {} from receiver account {}", amount, receiverAccountId);
+    }
+
+    @Transactional
     public void executeTransfer(UUID senderAccountId, UUID receiverAccountId, BigDecimal amount) {
         if (senderAccountId.equals(receiverAccountId)) {
             throw new TransactionException(ErrorCode.SELF_TRANSFER_NOT_ALLOWED, "Self transfer is not allowed");

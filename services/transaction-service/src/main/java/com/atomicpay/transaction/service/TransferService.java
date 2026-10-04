@@ -49,6 +49,11 @@ public class TransferService {
 
     @Transactional
     public TransactionResponse processTransfer(String idempotencyKey, UUID userId, TransferRequest request, String correlationId) {
+        return processTransfer(idempotencyKey, userId, request, correlationId, null);
+    }
+
+    @Transactional
+    public TransactionResponse processTransfer(String idempotencyKey, UUID userId, TransferRequest request, String correlationId, String simulateFailure) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new TransactionException(ErrorCode.IDEMPOTENCY_KEY_REQUIRED);
         }
@@ -87,7 +92,7 @@ public class TransferService {
 
         TransactionEntity savedTx = transactionRepository.save(transaction);
 
-        // Step 1: Validate
+        // Saga Step 1: VALIDATE
         TransactionStepEntity validateStep = createStep(savedTx.getId(), 1, StepType.VALIDATE);
         transitionState(savedTx, TransactionStatus.VALIDATING);
 
@@ -101,40 +106,74 @@ public class TransferService {
             throw e;
         }
 
-        // Step 2: Processing & Concurrency-Safe Balance Mutation
+        // Transition to PROCESSING
         transitionState(savedTx, TransactionStatus.PROCESSING);
-        TransactionStepEntity debitCreditStep = createStep(savedTx.getId(), 2, StepType.DEBIT);
+
+        // Saga Step 2: DEBIT
+        TransactionStepEntity debitStep = createStep(savedTx.getId(), 2, StepType.DEBIT);
+        if ("FAIL_DEBIT".equalsIgnoreCase(simulateFailure)) {
+            failStep(debitStep, ErrorCode.SAGA_FAILED.name(), "Simulated DEBIT failure");
+            failTransaction(savedTx, ErrorCode.SAGA_FAILED.name(), "Simulated DEBIT failure");
+            idempotencyService.markCompleted(idempotencyRecord, savedTx.getId(), 422, "Simulated DEBIT failure");
+            throw new TransactionException(ErrorCode.SAGA_FAILED, "Simulated DEBIT failure");
+        }
 
         try {
-            accountBalanceService.executeTransfer(request.getSenderAccountId(), request.getReceiverAccountId(), request.getAmount());
-            completeStepSuccess(debitCreditStep);
+            accountBalanceService.executeDebit(request.getSenderAccountId(), request.getAmount());
+            completeStepSuccess(debitStep);
+            transitionState(savedTx, TransactionStatus.DEBITED);
         } catch (TransactionException e) {
-            failStep(debitCreditStep, e.getErrorCode().name(), e.getMessage());
+            failStep(debitStep, e.getErrorCode().name(), e.getMessage());
             failTransaction(savedTx, e.getErrorCode().name(), e.getMessage());
             idempotencyService.markCompleted(idempotencyRecord, savedTx.getId(), e.getErrorCode().getHttpStatus().value(), e.getMessage());
             throw e;
         }
 
-        // Step 3: Double-Entry Ledger Record Creation
-        TransactionStepEntity ledgerStep = createStep(savedTx.getId(), 3, StepType.LEDGER);
+        // Saga Step 3: CREDIT
+        TransactionStepEntity creditStep = createStep(savedTx.getId(), 3, StepType.CREDIT);
+        if ("FAIL_CREDIT".equalsIgnoreCase(simulateFailure)) {
+            failStep(creditStep, ErrorCode.SAGA_FAILED.name(), "Simulated CREDIT failure");
+            compensateDebit(savedTx, idempotencyRecord, request, "Simulated CREDIT failure");
+            throw new TransactionException(ErrorCode.SAGA_FAILED, "Simulated CREDIT failure triggering compensation");
+        } else if ("DELAY_CREDIT".equalsIgnoreCase(simulateFailure)) {
+            failStep(creditStep, ErrorCode.TRANSACTION_PENDING.name(), "Simulated CREDIT timeout");
+            handlePendingOutcome(savedTx, idempotencyRecord, "Simulated CREDIT timeout");
+            throw new TransactionException(ErrorCode.TRANSACTION_PENDING, "Transaction pending reconciliation due to simulated credit timeout");
+        }
+
+        try {
+            accountBalanceService.executeCredit(request.getReceiverAccountId(), request.getAmount());
+            completeStepSuccess(creditStep);
+            transitionState(savedTx, TransactionStatus.CREDITED);
+        } catch (Exception e) {
+            log.error("Credit step failed for transaction {}, triggering Saga compensation", savedTx.getId(), e);
+            failStep(creditStep, ErrorCode.SAGA_FAILED.name(), e.getMessage());
+            compensateDebit(savedTx, idempotencyRecord, request, "Credit step failed: " + e.getMessage());
+            throw new TransactionException(ErrorCode.SAGA_FAILED, "Credit step failed, sender account compensated");
+        }
+
+        // Saga Step 4: LEDGER
+        TransactionStepEntity ledgerStep = createStep(savedTx.getId(), 4, StepType.LEDGER);
+        if ("FAIL_LEDGER".equalsIgnoreCase(simulateFailure)) {
+            failStep(ledgerStep, ErrorCode.SAGA_FAILED.name(), "Simulated LEDGER failure");
+            compensateFullTransfer(savedTx, idempotencyRecord, request, "Simulated LEDGER failure");
+            throw new TransactionException(ErrorCode.SAGA_FAILED, "Simulated LEDGER failure triggering compensation");
+        }
+
         try {
             recordLedgerDoubleEntry(savedTx.getId(), request.getSenderAccountId(), request.getReceiverAccountId(), request.getAmount(), request.getCurrency() != null ? request.getCurrency() : "INR");
             completeStepSuccess(ledgerStep);
         } catch (Exception e) {
-            log.error("Failed to record double-entry ledger entries for transaction {}", savedTx.getId(), e);
-            failStep(ledgerStep, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
-            failTransaction(savedTx, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
-            idempotencyService.markCompleted(idempotencyRecord, savedTx.getId(), 500, e.getMessage());
-            throw new TransactionException(ErrorCode.INTERNAL_ERROR, "Failed to record double-entry ledger entries");
+            log.error("Ledger step failed for transaction {}, triggering full Saga compensation", savedTx.getId(), e);
+            failStep(ledgerStep, ErrorCode.SAGA_FAILED.name(), e.getMessage());
+            compensateFullTransfer(savedTx, idempotencyRecord, request, "Ledger step failed: " + e.getMessage());
+            throw new TransactionException(ErrorCode.SAGA_FAILED, "Ledger step failed, transfer compensated");
         }
 
-        // Transition through state machine: PROCESSING -> DEBITED -> CREDITED -> COMPLETED
-        transitionState(savedTx, TransactionStatus.DEBITED);
-        transitionState(savedTx, TransactionStatus.CREDITED);
+        // Saga Step 5: COMPLETE
         transitionState(savedTx, TransactionStatus.COMPLETED);
         savedTx.setCompletedAt(OffsetDateTime.now());
-
-        TransactionStepEntity completeStep = createStep(savedTx.getId(), 4, StepType.COMPLETE);
+        TransactionStepEntity completeStep = createStep(savedTx.getId(), 5, StepType.COMPLETE);
         completeStepSuccess(completeStep);
 
         TransactionEntity finalTx = transactionRepository.save(savedTx);
@@ -206,6 +245,55 @@ public class TransferService {
                 .setParameter("now", now)
                 .setParameter("receiverId", receiverAccountId)
                 .executeUpdate();
+    }
+
+    private void compensateDebit(TransactionEntity tx, IdempotencyRecordEntity idempotencyRecord, TransferRequest request, String reason) {
+        log.warn("Initiating Saga compensation (reversing DEBIT) for transaction {}", tx.getId());
+        transitionState(tx, TransactionStatus.COMPENSATING);
+        TransactionStepEntity compensateStep = createStep(tx.getId(), 10, StepType.COMPENSATE_DEBIT);
+        try {
+            accountBalanceService.executeCompensationDebit(request.getSenderAccountId(), request.getAmount());
+            completeStepSuccess(compensateStep);
+            transitionState(tx, TransactionStatus.COMPENSATED);
+            tx.setFailureCode(ErrorCode.SAGA_FAILED.name());
+            tx.setFailureReason(reason);
+            transactionRepository.save(tx);
+            idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 422, "COMPENSATED: " + reason);
+        } catch (Exception e) {
+            log.error("CRITICAL: Failed to compensate debit for transaction {}", tx.getId(), e);
+            failStep(compensateStep, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
+            handlePendingOutcome(tx, idempotencyRecord, "Compensation failed: " + e.getMessage());
+        }
+    }
+
+    private void compensateFullTransfer(TransactionEntity tx, IdempotencyRecordEntity idempotencyRecord, TransferRequest request, String reason) {
+        log.warn("Initiating full Saga compensation (reversing DEBIT and CREDIT) for transaction {}", tx.getId());
+        transitionState(tx, TransactionStatus.COMPENSATING);
+        TransactionStepEntity compensateStep = createStep(tx.getId(), 10, StepType.COMPENSATE_DEBIT);
+        try {
+            accountBalanceService.executeCompensationCredit(request.getReceiverAccountId(), request.getAmount());
+            accountBalanceService.executeCompensationDebit(request.getSenderAccountId(), request.getAmount());
+            completeStepSuccess(compensateStep);
+            transitionState(tx, TransactionStatus.COMPENSATED);
+            tx.setFailureCode(ErrorCode.SAGA_FAILED.name());
+            tx.setFailureReason(reason);
+            transactionRepository.save(tx);
+            idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 422, "COMPENSATED: " + reason);
+        } catch (Exception e) {
+            log.error("CRITICAL: Failed to compensate full transfer for transaction {}", tx.getId(), e);
+            failStep(compensateStep, ErrorCode.INTERNAL_ERROR.name(), e.getMessage());
+            handlePendingOutcome(tx, idempotencyRecord, "Full compensation failed: " + e.getMessage());
+        }
+    }
+
+    private void handlePendingOutcome(TransactionEntity tx, IdempotencyRecordEntity idempotencyRecord, String reason) {
+        log.warn("Transaction {} outcome is pending/uncertain. Marking for RECONCILIATION_REQUIRED", tx.getId());
+        transitionState(tx, TransactionStatus.PENDING);
+        transitionState(tx, TransactionStatus.RECONCILIATION_REQUIRED);
+        tx.setFailureCode(ErrorCode.RECONCILIATION_REQUIRED.name());
+        tx.setFailureReason(reason);
+        transactionRepository.save(tx);
+        idempotencyService.markCompleted(idempotencyRecord, tx.getId(), 504, "RECONCILIATION_REQUIRED: " + reason);
     }
 
     private void validateTransferRequest(TransferRequest request) {

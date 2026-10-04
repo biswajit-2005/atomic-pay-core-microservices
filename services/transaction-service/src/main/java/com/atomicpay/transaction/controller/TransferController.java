@@ -27,6 +27,7 @@ public class TransferController {
     public ResponseEntity<ApiResponse<TransactionResponse>> createTransfer(
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(name = "X-User-Id", required = false) String xUserId,
+            @RequestHeader(name = "X-Simulate-Failure", required = false) String simulateFailure,
             @RequestParam(name = "userId", required = false) UUID paramUserId,
             @Valid @RequestBody TransferRequest request,
             HttpServletRequest httpServletRequest
@@ -44,7 +45,7 @@ public class TransferController {
         }
 
         String correlationId = getCorrelationId(httpServletRequest);
-        TransactionResponse response = transferService.processTransfer(idempotencyKey, targetUserId, request, correlationId);
+        TransactionResponse response = transferService.processTransfer(idempotencyKey, targetUserId, request, correlationId, simulateFailure);
         return new ResponseEntity<>(ApiResponse.ok(response, correlationId), HttpStatus.OK);
     }
 

@@ -112,8 +112,68 @@ class TransferServiceTest {
         assertEquals(new BigDecimal("1000.0000"), response.getAmount());
         assertEquals(TransactionStatus.COMPLETED, response.getStatus());
 
-        verify(accountBalanceService, times(1)).executeTransfer(senderAccountId, receiverAccountId, new BigDecimal("1000.0000"));
+        verify(accountBalanceService, times(1)).executeDebit(senderAccountId, new BigDecimal("1000.0000"));
+        verify(accountBalanceService, times(1)).executeCredit(receiverAccountId, new BigDecimal("1000.0000"));
         verify(idempotencyService, times(1)).markCompleted(eq(idempotencyRecord), any(), eq(200), eq("COMPLETED"));
+    }
+
+    @Test
+    @DisplayName("Should trigger Saga compensation when credit step fails")
+    void processTransfer_CreditFailure_TriggersSagaCompensation() {
+        TransactionEntity savedTx = TransactionEntity.builder()
+                .id(UUID.randomUUID())
+                .idempotencyKey(idempotencyKey)
+                .senderAccountId(senderAccountId)
+                .receiverAccountId(receiverAccountId)
+                .amount(new BigDecimal("1000.0000"))
+                .currency("INR")
+                .status(TransactionStatus.INITIATED)
+                .build();
+
+        IdempotencyRecordEntity idempotencyRecord = IdempotencyRecordEntity.builder().id(UUID.randomUUID()).build();
+
+        when(idempotencyService.calculatePayloadHash(any())).thenReturn("payload_hash");
+        when(idempotencyService.checkExistingRecord(any(), any(), any())).thenReturn(Optional.empty());
+        when(idempotencyService.createRecord(any(), any(), any())).thenReturn(idempotencyRecord);
+        when(transactionRepository.save(any())).thenReturn(savedTx);
+        when(transactionStepRepository.save(any(TransactionStepEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        TransactionException ex = assertThrows(TransactionException.class, () ->
+                transferService.processTransfer(idempotencyKey, userId, transferRequest, "cid", "FAIL_CREDIT"));
+
+        assertEquals(ErrorCode.SAGA_FAILED, ex.getErrorCode());
+        verify(accountBalanceService, times(1)).executeDebit(senderAccountId, new BigDecimal("1000.0000"));
+        verify(accountBalanceService, times(1)).executeCompensationDebit(senderAccountId, new BigDecimal("1000.0000"));
+        verify(idempotencyService, times(1)).markCompleted(eq(idempotencyRecord), any(), eq(422), contains("COMPENSATED"));
+    }
+
+    @Test
+    @DisplayName("Should mark transaction as RECONCILIATION_REQUIRED on credit timeout")
+    void processTransfer_CreditTimeout_TransitionsToReconciliationRequired() {
+        TransactionEntity savedTx = TransactionEntity.builder()
+                .id(UUID.randomUUID())
+                .idempotencyKey(idempotencyKey)
+                .senderAccountId(senderAccountId)
+                .receiverAccountId(receiverAccountId)
+                .amount(new BigDecimal("1000.0000"))
+                .currency("INR")
+                .status(TransactionStatus.INITIATED)
+                .build();
+
+        IdempotencyRecordEntity idempotencyRecord = IdempotencyRecordEntity.builder().id(UUID.randomUUID()).build();
+
+        when(idempotencyService.calculatePayloadHash(any())).thenReturn("payload_hash");
+        when(idempotencyService.checkExistingRecord(any(), any(), any())).thenReturn(Optional.empty());
+        when(idempotencyService.createRecord(any(), any(), any())).thenReturn(idempotencyRecord);
+        when(transactionRepository.save(any())).thenReturn(savedTx);
+        when(transactionStepRepository.save(any(TransactionStepEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        TransactionException ex = assertThrows(TransactionException.class, () ->
+                transferService.processTransfer(idempotencyKey, userId, transferRequest, "cid", "DELAY_CREDIT"));
+
+        assertEquals(ErrorCode.TRANSACTION_PENDING, ex.getErrorCode());
+        verify(accountBalanceService, times(1)).executeDebit(senderAccountId, new BigDecimal("1000.0000"));
+        verify(idempotencyService, times(1)).markCompleted(eq(idempotencyRecord), any(), eq(504), contains("RECONCILIATION_REQUIRED"));
     }
 
     @Test
