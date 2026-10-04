@@ -1,0 +1,42 @@
+server:
+  port: ${GATEWAY_PORT:8080}
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: auth-service
+          uri: http://${AUTH_SERVICE_HOST:localhost}:${AUTH_SERVICE_PORT:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+        - id: account-service
+          uri: http://${ACCOUNT_SERVICE_HOST:localhost}:${ACCOUNT_SERVICE_PORT:8082}
+          predicates:
+            - Path=/api/v1/accounts/**
+        - id: transaction-service
+          uri: http://${TRANSACTION_SERVICE_HOST:localhost}:${TRANSACTION_SERVICE_PORT:8083}
+          predicates:
+            - Path=/api/v1/transfers/**
+        - id: ledger-service
+          uri: http://${LEDGER_SERVICE_HOST:localhost}:${LEDGER_SERVICE_PORT:8084}
+          predicates:
+            - Path=/api/v1/ledger/**
+        - id: notification-service
+          uri: http://${NOTIFICATION_SERVICE_HOST:localhost}:${NOTIFICATION_SERVICE_PORT:8085}
+          predicates:
+            - Path=/api/v1/notifications/**
+        - id: admin-routes
+          uri: http://${TRANSACTION_SERVICE_HOST:localhost}:${TRANSACTION_SERVICE_PORT:8083}
+          predicates:
+            - Path=/api/v1/admin/**
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info,metrics
+  endpoint:
+    health:
+      show-details: always

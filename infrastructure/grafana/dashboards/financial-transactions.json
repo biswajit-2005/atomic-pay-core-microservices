@@ -1,0 +1,51 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Transaction Throughput",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(transactions_total[1m]))",
+          "legendFormat": "Transactions/sec"
+        }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "Transaction Success vs Failure Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(transactions_completed_total[1m]))",
+          "legendFormat": "Success"
+        },
+        {
+          "expr": "sum(rate(transactions_failed_total[1m]))",
+          "legendFormat": "Failed"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["atomic-pay", "financial", "transactions"],
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "title": "Atomic-Pay System Overview",
+  "uid": "atomic-pay-overview"
+}
