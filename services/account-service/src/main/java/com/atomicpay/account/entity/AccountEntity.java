@@ -22,7 +22,7 @@ public class AccountEntity {
     @Column(name = "account_number", nullable = false, unique = true, length = 32)
     private String accountNumber;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, columnDefinition = "CHAR(3)", length = 3)
     private String currency = "INR";
 
     @Enumerated(EnumType.STRING)

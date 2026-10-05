@@ -28,7 +28,7 @@ public class TransactionEntity {
     @Column(name = "amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
 
-    @Column(name = "currency", nullable = false, length = 3)
+    @Column(name = "currency", nullable = false, columnDefinition = "CHAR(3)", length = 3)
     private String currency;
 
     @Enumerated(EnumType.STRING)
