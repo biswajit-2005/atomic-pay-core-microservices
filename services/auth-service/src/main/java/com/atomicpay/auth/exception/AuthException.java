@@ -1,11 +1,8 @@
 package com.atomicpay.auth.exception;
 
-import lombok.Getter;
-
 import java.util.Collections;
 import java.util.Map;
 
-@Getter
 public class AuthException extends RuntimeException {
     private final ErrorCode errorCode;
     private final Map<String, Object> details;
@@ -26,5 +23,13 @@ public class AuthException extends RuntimeException {
         super(message);
         this.errorCode = errorCode;
         this.details = details;
+    }
+
+    public ErrorCode getErrorCode() {
+        return errorCode;
+    }
+
+    public Map<String, Object> getDetails() {
+        return details;
     }
 }
