@@ -5,7 +5,7 @@ spring:
   application:
     name: notification-service
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:atomic_pay}?currentSchema=notifications
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:atomic_pay}?currentSchema=notifications
     username: ${POSTGRES_USER:postgres}
     password: ${POSTGRES_PASSWORD:postgres_secret}
     driver-class-name: org.postgresql.Driver
