@@ -1,5 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Account } from '../types';
+import React, { createContext, useContext, useState } from 'react';
 
 export interface DemoUser {
   id: string;

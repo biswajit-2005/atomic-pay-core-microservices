@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth, DEMO_USERS } from '../context/AuthContext';
 import { notificationApi } from '../services/api';
-import { Shield, Wallet, BookOpen, Bell, Sliders, UserCheck, Activity } from 'lucide-react';
+import { Shield, Wallet, BookOpen, Bell, UserCheck, Activity } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
   const { currentUser, switchUser } = useAuth();

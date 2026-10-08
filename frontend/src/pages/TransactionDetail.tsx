@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { transferApi, ledgerApi } from '../services/api';
 import { Transaction, LedgerEntry } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
-import { ArrowLeft, CheckCircle2, XCircle, Clock, ShieldCheck, FileText } from 'lucide-react';
+import { ArrowLeft, XCircle, ShieldCheck, FileText } from 'lucide-react';
 
 export const TransactionDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
