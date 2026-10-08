@@ -148,14 +148,6 @@ See [`docs/api.md`](file:///c:/Users/biswa/WEB_DEV_PROJECTS/Atomic-pay/docs/api.
 
 ---
 
-## Demonstrated Technical Resume Highlights
-
-- Designed and built a **Reliable Distributed Financial Transaction Platform** in Java 21, Spring Boot, PostgreSQL, Redis, Kafka, and React.
-- Implemented concurrency-safe account mutations using database row locking (`SELECT FOR UPDATE`) and immutable double-entry ledgering (`NUMERIC(19,4)`), preventing duplicate transfers and balance corruption under high contention.
-- Engineered a **Saga Engine** with backward compensating transactions, timeout pending states, and automated reconciliation for partial or uncertain transaction outcomes.
-- Implemented **Transactional Outbox** and deduplicated Kafka consumers (`processed_events` inbox pattern) ensuring reliable event delivery and execution.
-- Configured Prometheus/Grafana observability dashboards tracking real-time throughput, P99 latency percentiles, saga compensations, and idempotency cache hit rates.
-
 ---
 
 ## License
